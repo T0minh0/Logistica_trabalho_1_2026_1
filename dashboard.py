@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
 from plotly.subplots import make_subplots
 
 from src.io_load import load_m5_data
@@ -35,42 +36,77 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ============ TEMA GLOBAL (DARK + VERMELHO) ============
+pio.templates.default = "plotly_dark"
+px.defaults.template = "plotly_dark"
+px.defaults.color_discrete_sequence = ["#ff4d57", "#c1121f", "#8c1118", "#ff8a92"]
+px.defaults.color_continuous_scale = px.colors.sequential.Reds
+
 # ============ ESTILO CSS CUSTOMIZADO ============
 st.markdown("""
 <style>
+    :root {
+        --bg-main: #0d0d0f;
+        --bg-surface: #17171b;
+        --bg-card: #1f1f24;
+        --accent: #c1121f;
+        --text-main: #f4f4f5;
+    }
+    .stApp, [data-testid="stAppViewContainer"] {
+        background: radial-gradient(circle at top right, rgba(193, 18, 31, 0.18), transparent 35%), var(--bg-main);
+        color: var(--text-main);
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        background: linear-gradient(180deg, #111115 0%, #17171b 100%);
+        border-right: 1px solid rgba(193, 18, 31, 0.35);
+    }
+    [data-testid="stHeader"] {
+        background: rgba(13, 13, 15, 0.75);
+    }
     .main-header {
         font-size: 2.5rem;
         font-weight: 700;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(90deg, #ff4d57 0%, #c1121f 55%, #8c1118 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
         padding: 1rem 0;
     }
     .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #2a1115 0%, #511218 100%);
         padding: 1.5rem;
         border-radius: 1rem;
         color: white;
         text-align: center;
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 6px 18px rgba(193, 18, 31, 0.3);
     }
-    .stMetric {
-        background-color: rgba(102, 126, 234, 0.1);
+    [data-testid="stMetric"] {
+        background-color: var(--bg-card);
         padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #667eea;
+        border-radius: 0.6rem;
+        border-left: 4px solid var(--accent);
     }
     .success-metric {
-        background-color: rgba(46, 204, 113, 0.1);
-        border-left: 4px solid #2ecc71;
+        background-color: rgba(25, 135, 84, 0.15);
+        border-left: 4px solid #22c55e;
     }
     .param-info {
-        background: rgba(102, 126, 234, 0.1);
-        padding: 0.5rem;
-        border-radius: 0.5rem;
-        font-size: 0.8rem;
+        background: rgba(193, 18, 31, 0.14);
+        border: 1px solid rgba(193, 18, 31, 0.35);
+        padding: 0.6rem;
+        border-radius: 0.6rem;
+        font-size: 0.82rem;
         margin-top: 0.5rem;
+        color: var(--text-main);
+    }
+    .stAlert {
+        background-color: var(--bg-surface);
+        color: var(--text-main);
+        border: 1px solid rgba(193, 18, 31, 0.35);
+    }
+    hr {
+        border: none;
+        border-top: 1px solid rgba(193, 18, 31, 0.28);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -92,7 +128,7 @@ def get_intermittency(df):
 
 # ============ SIDEBAR ============
 with st.sidebar:
-    st.image("https://img.icons8.com/3d-fluency/94/warehouse.png", width=80)
+    st.image("Flamengo.png", width=95)
     st.markdown("## 📊 Navegação")
     
     page = st.radio(
@@ -268,7 +304,7 @@ if page == "🏠 Visão Geral":
         x='date', 
         y='demand',
         labels={'demand': 'Demanda Total', 'date': 'Data'},
-        color_discrete_sequence=['#667eea']
+        color_discrete_sequence=['#ff4d57']
     )
     # Adicionar linha do ponto de ressuprimento agregado
     fig.add_hline(y=avg_daily_demand * lead_time + ss_total, 
@@ -304,13 +340,13 @@ elif page == "📈 Análise de Demanda":
             x='date', 
             y='demand',
             labels={'demand': 'Demanda Diária', 'date': 'Data'},
-            color_discrete_sequence=['#764ba2']
+            color_discrete_sequence=['#c1121f']
         )
         fig.add_scatter(
             x=subset['date'], 
             y=subset['demand'].rolling(7).mean(),
             name='Média Móvel (7d)',
-            line=dict(color='#667eea', width=2)
+            line=dict(color='#ff4d57', width=2)
         )
         # Adicionar linha de demanda média durante lead time
         mean_demand = subset['demand'].mean()
@@ -491,7 +527,7 @@ elif page == "🔮 Previsão":
             x=train['date'].tail(60),
             y=train['demand'].tail(60),
             name='Histórico',
-            line=dict(color='#667eea', width=2)
+            line=dict(color='#ff4d57', width=2)
         ))
         
         # Real
@@ -499,7 +535,7 @@ elif page == "🔮 Previsão":
             x=test['date'],
             y=test['demand'],
             name='Real',
-            line=dict(color='#2ecc71', width=2)
+            line=dict(color='#f5f5f5', width=2)
         ))
         
         # Previsão
@@ -507,7 +543,7 @@ elif page == "🔮 Previsão":
             x=test['date'],
             y=predictions,
             name=f'Previsão ({model_type.split(" ")[0]})',
-            line=dict(color='#e74c3c', width=2, dash='dash')
+            line=dict(color='#c1121f', width=2, dash='dash')
         ))
         
         # Destacar período de Lead Time
@@ -515,7 +551,7 @@ elif page == "🔮 Previsão":
             fig.add_vrect(
                 x0=test['date'].iloc[0],
                 x1=test['date'].iloc[lead_time-1],
-                fillcolor="rgba(255,165,0,0.2)",
+                fillcolor="rgba(193, 18, 31, 0.16)",
                 layer="below",
                 line_width=0,
                 annotation_text=f"Lead Time ({lead_time}d)",
@@ -528,7 +564,7 @@ elif page == "🔮 Previsão":
             x=list(test['date']) + list(test['date'][::-1]),
             y=list(predictions + 1.96*std_pred) + list((predictions - 1.96*std_pred)[::-1]),
             fill='toself',
-            fillcolor='rgba(231, 76, 60, 0.1)',
+            fillcolor='rgba(193, 18, 31, 0.12)',
             line=dict(color='rgba(255,255,255,0)'),
             name='IC 95%'
         ))
@@ -711,9 +747,9 @@ elif page == "📦 Gestão de Estoques":
                 x=csl_range * 100,
                 y=ss_values,
                 name='Estoque de Segurança',
-                line=dict(color='#667eea', width=3)
+                line=dict(color='#ff4d57', width=3)
             ))
-            fig.add_vline(x=csl_target * 100, line_dash="dash", line_color="#e74c3c",
+            fig.add_vline(x=csl_target * 100, line_dash="dash", line_color="#c1121f",
                           annotation_text=f"CSL atual = {csl_target:.0%}")
             fig.update_layout(
                 height=350,
@@ -732,9 +768,9 @@ elif page == "📦 Gestão de Estoques":
                 x=lt_range,
                 y=ss_lt_values,
                 name='Estoque de Segurança',
-                line=dict(color='#764ba2', width=3)
+                line=dict(color='#c1121f', width=3)
             ))
-            fig.add_vline(x=lead_time, line_dash="dash", line_color="#e74c3c",
+            fig.add_vline(x=lead_time, line_dash="dash", line_color="#c1121f",
                           annotation_text=f"LT atual = {lead_time}d")
             fig.update_layout(
                 height=350,
@@ -756,9 +792,9 @@ elif page == "📦 Gestão de Estoques":
             x=Q_range, 
             y=costs,
             name='Custo Total',
-            line=dict(color='#667eea', width=3)
+            line=dict(color='#ff4d57', width=3)
         ))
-        fig.add_vline(x=eoq, line_dash="dash", line_color="#e74c3c", 
+        fig.add_vline(x=eoq, line_dash="dash", line_color="#c1121f", 
                       annotation_text=f"EOQ = {eoq:.0f}")
         fig.update_layout(
             height=400,
@@ -985,7 +1021,7 @@ elif page == "🎲 Simulação & Etapa 2":
                                 x='Classe',
                                 y='% Valor',
                                 color='Classe',
-                                color_discrete_map={'A': '#2ecc71', 'B': '#f1c40f', 'C': '#e74c3c'},
+                                color_discrete_map={'A': '#ff8a92', 'B': '#ff4d57', 'C': '#8c1118'},
                                 text='% Valor'
                             )
                             fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
