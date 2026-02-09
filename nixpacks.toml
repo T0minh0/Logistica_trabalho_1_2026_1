@@ -8,7 +8,7 @@ nixPkgs = ["...", "git-lfs"]
 cmds = ["mkdir -p Resultados"]
 
 [start]
-cmd = "streamlit run dashboard.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false"
+cmd = "streamlit run dashboard.py --server.port=${PORT:-3000} --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false"
 
 [variables]
 PYTHONUNBUFFERED = "1"
