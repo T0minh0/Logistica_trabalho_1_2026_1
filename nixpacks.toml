@@ -1,14 +1,14 @@
 # Nixpacks config para deploy no Coolify
-# Aplicação Streamlit - Logística Quantitativa M5
+# Aplicacao Streamlit - Logistica Quantitativa M5
 
 [phases.setup]
-nixPkgs = ["...", "git-lfs"]
+nixPkgs = ["git-lfs", "curl"]
 
 [phases.build]
 cmds = ["mkdir -p Resultados"]
 
 [start]
-cmd = "streamlit run dashboard.py --server.port=${PORT:-3000} --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false"
+cmd = "streamlit run dashboard.py --server.port=${PORT:-3000} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false --browser.gatherUsageStats=false"
 
 [variables]
 PYTHONUNBUFFERED = "1"
