@@ -1,0 +1,15 @@
+.git
+.gitattributes
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+.mypy_cache
+notebooks/
+*.docx
+*.pdf
+*.md
+.vscode
+.idea
+Resultados/
