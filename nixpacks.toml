@@ -1,9 +1,6 @@
 # Nixpacks config para deploy no Coolify
 # Aplicacao Streamlit - Logistica Quantitativa M5
 
-[phases.setup]
-nixPkgs = ["git-lfs", "curl"]
-
 [phases.build]
 cmds = ["mkdir -p Resultados"]
 
