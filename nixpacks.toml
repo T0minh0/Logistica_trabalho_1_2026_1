@@ -4,9 +4,6 @@
 [phases.setup]
 nixPkgs = ["...", "git-lfs"]
 
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
-
 [phases.build]
 cmds = ["mkdir -p Resultados"]
 
