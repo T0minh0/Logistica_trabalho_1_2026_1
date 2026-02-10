@@ -3,6 +3,7 @@ Ambiente de Simulação com SimPy para Gestão de Estoques
 Suporta lead time estocástico e múltiplas políticas de reposição.
 """
 
+import copy
 import simpy
 import numpy as np
 import pandas as pd
@@ -134,6 +135,13 @@ class InventoryPolicy:
     
     def __init__(self, name: str):
         self.name = name
+
+    def reset(self) -> None:
+        """
+        Reseta estado interno entre replicações.
+        Políticas sem estado não precisam sobrescrever.
+        """
+        return None
     
     def should_order(self, inventory_position: float, **kwargs) -> bool:
         raise NotImplementedError
@@ -189,6 +197,10 @@ class PSPolicy(InventoryPolicy):
         self.P = P
         self.S = S
         self.last_review = -self.P  # Para revisar no dia 0
+
+    def reset(self) -> None:
+        """Garante revisão no dia 0 em cada nova replicação."""
+        self.last_review = -self.P
     
     def should_order(self, inventory_position: float, current_day: int = 0, **kwargs) -> bool:
         if current_day - self.last_review >= self.P:
@@ -312,7 +324,10 @@ def run_monte_carlo(config: SimulationConfig, policy: InventoryPolicy,
     results = []
     
     for i in range(n_reps):
-        sim = InventorySimulation(config, policy, empirical_demand)
+        # Isola estado de política por replicação (crítico para políticas com memória, ex: P,S).
+        policy_instance = copy.deepcopy(policy)
+        policy_instance.reset()
+        sim = InventorySimulation(config, policy_instance, empirical_demand)
         metrics = sim.run(seed=config.random_seed + i)
         results.append({
             'replication': i,
@@ -330,12 +345,15 @@ def run_monte_carlo(config: SimulationConfig, policy: InventoryPolicy,
     
     # Estatísticas
     summary = {}
-    for col in ['total_cost', 'holding_cost', 'ordering_cost', 'stockout_cost', 
+    for col in ['total_cost', 'holding_cost', 'ordering_cost', 'stockout_cost',
                 'fill_rate', 'avg_inventory', 'total_stockouts']:
-        summary[f'{col}_mean'] = df[col].mean()
-        summary[f'{col}_std'] = df[col].std()
-        summary[f'{col}_ci_lower'] = df[col].mean() - 1.96 * df[col].std() / np.sqrt(n_reps)
-        summary[f'{col}_ci_upper'] = df[col].mean() + 1.96 * df[col].std() / np.sqrt(n_reps)
+        mean_val = df[col].mean()
+        std_val = df[col].std(ddof=1) if n_reps > 1 else 0.0
+        ci_margin = 1.96 * std_val / np.sqrt(n_reps) if n_reps > 1 else 0.0
+        summary[f'{col}_mean'] = mean_val
+        summary[f'{col}_std'] = std_val
+        summary[f'{col}_ci_lower'] = mean_val - ci_margin
+        summary[f'{col}_ci_upper'] = mean_val + ci_margin
     
     summary['policy_name'] = policy.name
     summary['n_replications'] = n_reps
@@ -370,7 +388,8 @@ def compare_policies(config: SimulationConfig, policies: List[InventoryPolicy],
 
 def create_policies_from_params(demand_mean: float, demand_std: float,
                                  lead_time_mean: float, lead_time_std: float,
-                                 csl_target: float, K: float, h: float) -> List[InventoryPolicy]:
+                                 csl_target: float, K: float, h: float,
+                                 max_review_period_days: int = 30) -> List[InventoryPolicy]:
     """
     Cria conjunto de políticas para comparação baseado nos parâmetros.
     """
@@ -378,10 +397,12 @@ def create_policies_from_params(demand_mean: float, demand_std: float,
     
     # Cálculos base
     z = norm.ppf(csl_target)
-    D_annual = demand_mean * 365
+    demand_mean_safe = max(demand_mean, 1e-8)
+    h_safe = max(h, 1e-8)
+    D_annual = demand_mean_safe * 365
     
     # EOQ
-    Q_eoq = np.sqrt(2 * K * D_annual / h)
+    Q_eoq = np.sqrt(2 * max(K, 0) * D_annual / h_safe)
     
     # Demanda durante lead time
     mu_L = demand_mean * lead_time_mean
@@ -396,7 +417,9 @@ def create_policies_from_params(demand_mean: float, demand_std: float,
     S = s + Q_eoq
     
     # (P, S) - revisão periódica
-    P = max(1, int(Q_eoq / demand_mean))  # Período de revisão
+    # Período de revisão em dias via ciclo EOQ, com limite superior para evitar ciclos irrealistas.
+    eoq_cycle_days = Q_eoq / demand_mean_safe
+    P = int(np.clip(np.round(eoq_cycle_days), 1, max(1, int(max_review_period_days))))
     mu_P_L = demand_mean * (P + lead_time_mean)
     sigma_P_L = np.sqrt(demand_std**2 * (P + lead_time_mean) + demand_mean**2 * lead_time_std**2)
     SS_periodic = z * sigma_P_L

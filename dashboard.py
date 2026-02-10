@@ -10,6 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
+from datetime import datetime
 
 from src.io_load import load_m5_data
 from src.preprocess import preprocess_data
@@ -20,6 +21,17 @@ from src.forecast.metrics import evaluate_forecast
 from src.inventory.eoq import calculate_eoq, total_cost_deterministic
 from src.inventory.rq_policy import RQPolicy
 from src.config import PARAMS_SCENARIO_1
+from src.decision_support import (
+    rank_forecast_models,
+    rank_simulation_policies,
+    simulation_justification,
+)
+
+try:
+    from src.reporting.decision_pdf import build_simulation_decision_pdf
+    HAS_PDF_EXPORT = True
+except ImportError:
+    HAS_PDF_EXPORT = False
 
 # Import advanced models
 try:
@@ -675,6 +687,104 @@ elif page == "🔮 Previsão":
                             'Acurácia': '{:.1f}%'
                         }), width='stretch')
 
+                    st.markdown("#### 🎯 Motor de Decisão para Escolha do Modelo")
+                    colw1, colw2, colw3 = st.columns(3)
+                    with colw1:
+                        weight_accuracy = st.slider(
+                            "Peso Acurácia",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.50,
+                            step=0.05,
+                            key="forecast_weight_accuracy"
+                        )
+                    with colw2:
+                        weight_rmse = st.slider(
+                            "Peso RMSE",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.30,
+                            step=0.05,
+                            key="forecast_weight_rmse"
+                        )
+                    with colw3:
+                        weight_wape = st.slider(
+                            "Peso WAPE",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.20,
+                            step=0.05,
+                            key="forecast_weight_wape"
+                        )
+
+                    decision_models_df = results_df.rename(
+                        columns={'Acurácia': 'Acuracia (%)'}
+                    ).copy()
+                    decision_models_df['WAPE (%)'] = decision_models_df['WAPE'] * 100
+
+                    ranked_models = rank_forecast_models(
+                        decision_models_df,
+                        weight_accuracy=weight_accuracy,
+                        weight_rmse=weight_rmse,
+                        weight_wape=weight_wape,
+                    )
+
+                    best_model = ranked_models.iloc[0]
+                    score_gap = (
+                        best_model['Score de Decisao'] - ranked_models.iloc[1]['Score de Decisao']
+                        if len(ranked_models) > 1 else 0.0
+                    )
+                    st.success(
+                        f"🏆 **Modelo recomendado para decisão operacional:** {best_model['Modelo']}"
+                    )
+                    st.caption(
+                        f"Score {best_model['Score de Decisao']:.1f} | "
+                        f"Acurácia {best_model['Acuracia (%)']:.1f}% | "
+                        f"RMSE {best_model['RMSE']:.2f} | "
+                        f"WAPE {best_model['WAPE (%)']:.2f}% | "
+                        f"Vantagem vs 2º colocado: {score_gap:.1f} pontos."
+                    )
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig = px.bar(
+                            ranked_models,
+                            x='Modelo',
+                            y='Score de Decisao',
+                            color='Score de Decisao',
+                            color_continuous_scale='RdYlGn',
+                            text='Score de Decisao'
+                        )
+                        fig.update_traces(texttemplate='%{text:.1f}', textposition='outside')
+                        fig.update_layout(height=350, showlegend=False, yaxis_title="Score de Decisão")
+                        st.plotly_chart(fig, width='stretch')
+
+                    with col2:
+                        fig = px.scatter(
+                            ranked_models,
+                            x='RMSE',
+                            y='Acuracia (%)',
+                            size='Score de Decisao',
+                            color='Score de Decisao',
+                            color_continuous_scale='RdYlGn',
+                            text='Modelo'
+                        )
+                        fig.update_traces(textposition='top center')
+                        fig.update_layout(height=350, yaxis_title="Acurácia (%)")
+                        st.plotly_chart(fig, width='stretch')
+
+                    with st.expander("📋 Ver ranking detalhado de decisão"):
+                        st.dataframe(
+                            ranked_models[['Modelo', 'Score de Decisao', 'Acuracia (%)', 'RMSE', 'WAPE (%)', 'MAE']].style.format({
+                                'Score de Decisao': '{:.1f}',
+                                'Acuracia (%)': '{:.1f}%',
+                                'RMSE': '{:.2f}',
+                                'WAPE (%)': '{:.2f}%',
+                                'MAE': '{:.2f}',
+                            }),
+                            width='stretch'
+                        )
+
 elif page == "📦 Gestão de Estoques":
     st.markdown('<h1 class="main-header">📦 Gestão de Estoques</h1>', unsafe_allow_html=True)
     st.markdown("---")
@@ -835,12 +945,15 @@ elif page == "🎲 Simulação & Etapa 2":
         
         subset_sim = df[(df['store_id'] == selected_store_sim) & (df['item_id'] == selected_item_sim)]
         
+        sim_result_key = "sim_results_last"
+        sim_context_key = "sim_context_last"
+
         if len(subset_sim) > 0 and st.button("▶️ Executar Simulação Monte Carlo", type="primary"):
             with st.spinner("Executando simulação..."):
                 try:
                     from src.simulation.simpy_env import (
-                        SimulationConfig, run_monte_carlo, compare_policies,
-                        RQPolicy as SimRQPolicy, sSPolicy, PSPolicy,
+                        SimulationConfig,
+                        compare_policies,
                         create_policies_from_params
                     )
                     
@@ -865,70 +978,243 @@ elif page == "🎲 Simulação & Etapa 2":
                         csl_target=csl_target
                     )
                     
-                    # Criar políticas
+                    # Criar políticas e comparar
                     policies = create_policies_from_params(
                         demand_mean, demand_std,
                         lead_time, lead_time * lt_std_factor,
                         csl_target, K_cost, h_pct * unit_cost
                     )
                     
-                    # Executar comparação
-                    results_df = compare_policies(config, policies[:3])  # (R,Q), (s,S), (P,S)
+                    results_df = compare_policies(config, policies[:3]).rename(columns={
+                        'Política': 'Politica',
+                        'PolÃ­tica': 'Politica',
+                        'Custo Total (média)': 'Custo Total (media)',
+                        'Custo Total (mÃ©dia)': 'Custo Total (media)',
+                    })
                     
-                    st.success(f"✅ Simulação concluída: {n_replications} replicações × {len(policies[:3])} políticas")
+                    st.session_state[sim_result_key] = results_df
+                    st.session_state[sim_context_key] = {
+                        'store_id': selected_store_sim,
+                        'item_id': selected_item_sim,
+                        'n_replications': n_replications,
+                        'horizon_days': sim_horizon,
+                        'lead_time_mean': float(lead_time),
+                        'lt_variability_pct': int(lt_std_factor * 100),
+                        'ordering_cost': float(K_cost),
+                        'stockout_cost': float(stockout_cost),
+                        'generated_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
+                    }
                     
-                    # Resultados
-                    st.markdown("### 📊 Comparação de Políticas")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        # Gráfico de custo
-                        fig = px.bar(
-                            results_df,
-                            x='Política',
-                            y='Custo Total (média)',
-                            color='Custo Total (média)',
-                            color_continuous_scale='RdYlGn_r',
-                            text='Custo Total (média)'
-                        )
-                        fig.update_traces(texttemplate='R$ %{text:,.0f}', textposition='outside')
-                        fig.update_layout(height=350, showlegend=False, yaxis_title="Custo Total (R$)")
-                        st.plotly_chart(fig, width='stretch')
-                    
-                    with col2:
-                        # Gráfico de fill rate
-                        fig = px.bar(
-                            results_df,
-                            x='Política',
-                            y='Fill Rate (%)',
-                            color='Fill Rate (%)',
-                            color_continuous_scale='RdYlGn',
-                            text='Fill Rate (%)'
-                        )
-                        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-                        fig.update_layout(height=350, showlegend=False)
-                        st.plotly_chart(fig, width='stretch')
-                    
-                    # Tabela detalhada
-                    st.markdown("### 📋 Resultados Detalhados")
-                    st.dataframe(results_df.style.format({
-                        'Custo Total (média)': 'R$ {:,.2f}',
-                        'Fill Rate (%)': '{:.1f}%',
-                        'Estoque Médio': '{:,.1f}',
-                        'Faltas Totais': '{:,.0f}',
-                        'Custo Holding': 'R$ {:,.2f}',
-                        'Custo Pedidos': 'R$ {:,.2f}',
-                        'Custo Falta': 'R$ {:,.2f}'
-                    }), width='stretch')
-                    
-                    # Recomendação
-                    best_policy = results_df.loc[results_df['Custo Total (média)'].idxmin(), 'Política']
-                    st.success(f"🏆 **Política Recomendada:** {best_policy}")
-                    
+                    st.success(
+                        f"✅ Simulação concluída: {n_replications} replicações × {len(policies[:3])} políticas"
+                    )
                 except Exception as e:
                     st.error(f"Erro na simulação: {e}")
                     st.exception(e)
+
+        if sim_result_key in st.session_state:
+            results_df = st.session_state[sim_result_key].copy()
+            sim_context = st.session_state.get(sim_context_key, {})
+            
+            st.markdown("### 📊 Comparação de Políticas")
+            st.caption(
+                f"Último cenário: loja {sim_context.get('store_id', '-')}, "
+                f"item {sim_context.get('item_id', '-')}, "
+                f"gerado em {sim_context.get('generated_at', '-')}."
+            )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                fig = px.bar(
+                    results_df,
+                    x='Politica',
+                    y='Custo Total (media)',
+                    color='Custo Total (media)',
+                    color_continuous_scale='RdYlGn_r',
+                    text='Custo Total (media)'
+                )
+                fig.update_traces(texttemplate='R$ %{text:,.0f}', textposition='outside')
+                fig.update_layout(height=350, showlegend=False, yaxis_title="Custo Total (R$)")
+                st.plotly_chart(fig, width='stretch')
+            
+            with col2:
+                fig = px.bar(
+                    results_df,
+                    x='Politica',
+                    y='Fill Rate (%)',
+                    color='Fill Rate (%)',
+                    color_continuous_scale='RdYlGn',
+                    text='Fill Rate (%)'
+                )
+                fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                fig.update_layout(height=350, showlegend=False)
+                st.plotly_chart(fig, width='stretch')
+            
+            st.markdown("### 📋 Resultados Detalhados")
+            detail_format = {
+                'Custo Total (media)': 'R$ {:,.2f}',
+                'Fill Rate (%)': '{:.1f}%',
+                'Estoque Médio': '{:,.1f}',
+                'Estoque MÃ©dio': '{:,.1f}',
+                'Faltas Totais': '{:,.1f}',
+                'Custo Holding': 'R$ {:,.2f}',
+                'Custo Pedidos': 'R$ {:,.2f}',
+                'Custo Falta': 'R$ {:,.2f}'
+            }
+            detail_format = {k: v for k, v in detail_format.items() if k in results_df.columns}
+            st.dataframe(results_df.style.format(detail_format), width='stretch')
+            
+            st.markdown("### 🎯 Motor de Decisão da Simulação")
+            d1, d2, d3, d4 = st.columns(4)
+            with d1:
+                min_fill_rate = st.slider(
+                    "Fill Rate mínimo (%)",
+                    min_value=80.0,
+                    max_value=99.9,
+                    value=float(csl_target * 100),
+                    step=0.1,
+                    key="sim_decision_min_fill_rate"
+                )
+            with d2:
+                weight_cost = st.slider(
+                    "Peso Custo",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.55,
+                    step=0.05,
+                    key="sim_decision_weight_cost"
+                )
+            with d3:
+                weight_service = st.slider(
+                    "Peso Serviço",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.30,
+                    step=0.05,
+                    key="sim_decision_weight_service"
+                )
+            with d4:
+                weight_risk = st.slider(
+                    "Peso Risco",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.15,
+                    step=0.05,
+                    key="sim_decision_weight_risk"
+                )
+            
+            ranked_policies = rank_simulation_policies(
+                results_df,
+                min_fill_rate=min_fill_rate,
+                weight_cost=weight_cost,
+                weight_service=weight_service,
+                weight_risk=weight_risk
+            )
+            best_policy_row = ranked_policies.iloc[0]
+            reasons = simulation_justification(ranked_policies, min_fill_rate=min_fill_rate)
+            
+            status_label = "Atende meta" if bool(best_policy_row['Atende Fill Rate']) else "Compromisso"
+            st.success(
+                f"🏆 **Política recomendada:** {best_policy_row['Politica']} "
+                f"({status_label}, score {best_policy_row['Score Ajustado']:.1f})"
+            )
+            st.markdown("**Justificativa:**")
+            for reason in reasons[:4]:
+                st.write(f"- {reason}")
+            
+            g1, g2 = st.columns(2)
+            with g1:
+                fig = px.scatter(
+                    ranked_policies,
+                    x='Custo Total (media)',
+                    y='Fill Rate (%)',
+                    size='Faltas Totais',
+                    color='Score Ajustado',
+                    color_continuous_scale='RdYlGn',
+                    text='Politica'
+                )
+                fig.add_hline(
+                    y=min_fill_rate,
+                    line_dash='dash',
+                    line_color='#c1121f',
+                    annotation_text=f"Meta fill rate = {min_fill_rate:.1f}%"
+                )
+                fig.add_trace(go.Scatter(
+                    x=[best_policy_row['Custo Total (media)']],
+                    y=[best_policy_row['Fill Rate (%)']],
+                    mode='markers',
+                    marker=dict(symbol='star', size=18, color='gold', line=dict(color='black', width=1)),
+                    name='Recomendada'
+                ))
+                fig.update_traces(textposition='top center')
+                fig.update_layout(height=380)
+                st.plotly_chart(fig, width='stretch')
+            
+            with g2:
+                fig = px.bar(
+                    ranked_policies,
+                    x='Politica',
+                    y='Score Ajustado',
+                    color='Score Ajustado',
+                    color_continuous_scale='RdYlGn',
+                    text='Score Ajustado'
+                )
+                fig.update_traces(texttemplate='%{text:.1f}', textposition='outside')
+                fig.update_layout(height=380, showlegend=False)
+                st.plotly_chart(fig, width='stretch')
+            
+            ranked_display = ranked_policies.copy()
+            ranked_display['Status Fill Rate'] = np.where(
+                ranked_display['Atende Fill Rate'], 'OK', 'Abaixo da meta'
+            )
+            st.markdown("#### Ranking de Decisão")
+            st.dataframe(
+                ranked_display[
+                    [
+                        'Politica', 'Status Fill Rate', 'Score Ajustado', 'Custo Total (media)',
+                        'Fill Rate (%)', 'Faltas Totais', 'Custo Holding', 'Custo Pedidos', 'Custo Falta'
+                    ]
+                ].style.format({
+                    'Score Ajustado': '{:.1f}',
+                    'Custo Total (media)': 'R$ {:,.2f}',
+                    'Fill Rate (%)': '{:.1f}%',
+                    'Faltas Totais': '{:.1f}',
+                    'Custo Holding': 'R$ {:,.2f}',
+                    'Custo Pedidos': 'R$ {:,.2f}',
+                    'Custo Falta': 'R$ {:,.2f}'
+                }),
+                width='stretch'
+            )
+            
+            if HAS_PDF_EXPORT:
+                scenario_params = {
+                    'horizon_days': sim_context.get('horizon_days', sim_horizon),
+                    'n_replications': sim_context.get('n_replications', n_replications),
+                    'lead_time_mean': sim_context.get('lead_time_mean', float(lead_time)),
+                    'lt_variability_pct': sim_context.get('lt_variability_pct', int(lt_std_factor * 100)),
+                    'ordering_cost': sim_context.get('ordering_cost', float(K_cost)),
+                    'stockout_cost': sim_context.get('stockout_cost', float(stockout_cost)),
+                    'min_fill_rate': min_fill_rate,
+                }
+                pdf_bytes = build_simulation_decision_pdf(
+                    store_id=str(sim_context.get('store_id', selected_store_sim)),
+                    item_id=str(sim_context.get('item_id', selected_item_sim)),
+                    recommended_policy=str(best_policy_row['Politica']),
+                    reasons=reasons,
+                    ranked_df=ranked_policies,
+                    scenario_params=scenario_params
+                )
+                file_ts = datetime.now().strftime('%Y%m%d_%H%M')
+                st.download_button(
+                    label="📄 Exportar recomendação em PDF",
+                    data=pdf_bytes,
+                    file_name=f"decisao_simulacao_{file_ts}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    key="download_simulation_decision_pdf"
+                )
+            else:
+                st.info("Para habilitar exportação em PDF, instale a dependência: reportlab")
     
     # ===================== TAB 2: RISK POOLING AVANÇADO =====================
     with tab2:
